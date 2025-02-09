@@ -444,6 +444,19 @@ class GRPOTrainer(Trainer):
         logits = logits[:, -logits_to_keep:]
         return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
 
+    def _get_per_token_3d_logps(self, model, input_ids, attention_mask, logits_to_keep):
+    # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded.
+    logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
+    logits = logits[:, :-1, :]  # shape: (B, L-1, V); exclude the last logit (for next token prediction)
+
+    input_ids = input_ids[:, -logits_to_keep:]
+    # For transformers<=4.48, logits_to_keep argument isn't supported; here we trim logits ourselves.
+    logits = logits[:, -logits_to_keep:]  # now logits has shape: (B, L, V)
+    
+    # Instead of using selective_log_softmax, compute the full distribution:
+    full_logprobs = torch.nn.functional.log_softmax(logits, dim=-1)  # shape: (B, L, V)
+    return full_logprobs
+
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
         prompts = [x["prompt"] for x in inputs]
@@ -523,6 +536,9 @@ class GRPOTrainer(Trainer):
                 ref_per_token_logps = self._get_per_token_logps(
                     self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
                 )
+                ref_per_token_3d_logps = self._get_per_token_3d_logps(
+                    self.ref_model, prompt_completion_ids, attention_mask, logits_to_keep
+                )
             else:
                 with self.accelerator.unwrap_model(self.model).disable_adapter():
                     ref_per_token_logps = self._get_per_token_logps(
@@ -556,7 +572,7 @@ class GRPOTrainer(Trainer):
                 # Repeat all input columns (but "prompt" and "completion") to match the number of generations
                 keys = [key for key in inputs[0] if key not in ["prompt", "completion"]]
                 reward_kwargs = {key: [example[key] for example in inputs] for key in keys}
-                output_reward_func = reward_func(prompts=prompts, completions=completions, logprobs=ref_per_token_logps, **reward_kwargs)
+                output_reward_func = reward_func(prompts=prompts, completions=completions, logprobs=ref_per_token_3d_logps, **reward_kwargs)
                 rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
         # Gather the reward per function: this part is crucial, because the rewards are normalized per group and the
