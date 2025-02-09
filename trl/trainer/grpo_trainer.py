@@ -445,17 +445,17 @@ class GRPOTrainer(Trainer):
         return selective_log_softmax(logits, input_ids)  #  compute logprobs for the input tokens
 
     def _get_per_token_3d_logps(self, model, input_ids, attention_mask, logits_to_keep):
-    # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded.
-    logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
-    logits = logits[:, :-1, :]  # shape: (B, L-1, V); exclude the last logit (for next token prediction)
-
-    input_ids = input_ids[:, -logits_to_keep:]
-    # For transformers<=4.48, logits_to_keep argument isn't supported; here we trim logits ourselves.
-    logits = logits[:, -logits_to_keep:]  # now logits has shape: (B, L, V)
+        # We add 1 to `logits_to_keep` because the last logits of the sequence is later excluded.
+        logits = model(input_ids=input_ids, attention_mask=attention_mask, logits_to_keep=logits_to_keep + 1).logits
+        logits = logits[:, :-1, :]  # shape: (B, L-1, V); exclude the last logit (for next token prediction)
     
-    # Instead of using selective_log_softmax, compute the full distribution:
-    full_logprobs = torch.nn.functional.log_softmax(logits, dim=-1)  # shape: (B, L, V)
-    return full_logprobs
+        input_ids = input_ids[:, -logits_to_keep:]
+        # For transformers<=4.48, logits_to_keep argument isn't supported; here we trim logits ourselves.
+        logits = logits[:, -logits_to_keep:]  # now logits has shape: (B, L, V)
+        
+        # Instead of using selective_log_softmax, compute the full distribution:
+        full_logprobs = torch.nn.functional.log_softmax(logits, dim=-1)  # shape: (B, L, V)
+        return full_logprobs
 
     def _prepare_inputs(self, inputs: dict[str, Union[torch.Tensor, Any]]) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
